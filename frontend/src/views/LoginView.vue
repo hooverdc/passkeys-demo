@@ -67,9 +67,13 @@ const loginWithPasskey = async () => {
       authenticatorData: bufferToBase64URL(credential.response.authenticatorData),
       clientDataJSON: bufferToBase64URL(credential.response.clientDataJSON),
       signature: bufferToBase64URL(credential.response.signature),
-      userHandle: credential.response.userHandle,
+      userHandle: null,
     },
     type: "public-key"
+  }
+
+  if (credential.response.userHandle) {
+    credentialJSON.response.userHandle = bufferToBase64URL(credential.response.userHandle);
   }
 
   try {

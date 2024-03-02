@@ -12,7 +12,7 @@ const password = ref("");
 
 const loginWithPassword = async () => {
   try {
-    const response = await fetch(`http://localhost:5000/password/login`, {
+    const response = await fetch(`/password/login`, {
       method: "POST",
       body: JSON.stringify({
         "user_name": username.value,
@@ -39,7 +39,7 @@ const loginWithPasskey = async () => {
   // get webauthn options from server
 
   let response = await fetch(
-    `http://localhost:5000/webauthn/authenticate/options?user_name=${username.value}`
+    `/webauthn/authenticate/options?user_name=${username.value}`
   );
   let options = await response.json();
   console.log(options)
@@ -73,7 +73,7 @@ const loginWithPasskey = async () => {
   }
 
   try {
-    response = await fetch(`http://localhost:5000/webauthn/authenticate`, {
+    response = await fetch(`/webauthn/authenticate`, {
       method: "POST",
       body: JSON.stringify(credentialJSON),
       headers: {

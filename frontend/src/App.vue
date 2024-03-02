@@ -29,10 +29,10 @@ import { RouterLink, RouterView } from 'vue-router'
           <RouterLink to="/login" class="nav-link">Login</RouterLink>
         </li>
         <li class="nav-item">
-          <RouterLink to="/logout" class="nav-link">Logout</RouterLink>
+          <RouterLink to="/manage" class="nav-link">Manage</RouterLink>
         </li>
         <li class="nav-item">
-          <RouterLink to="/manage" class="nav-link"></RouterLink>
+          <a href="/auth/logout" class="nav-link">Logout</a>
         </li>
       </ul>
     </nav>

@@ -1,6 +1,9 @@
-from typing import Literal
-from flask import Flask, send_from_directory, session, request
-from dataclasses import dataclass
+import sqlite3
+import os
+from http import HTTPStatus
+from secrets import token_bytes
+
+from flask import Flask, request, send_from_directory, session
 from webauthn import (
     base64url_to_bytes,
     generate_authentication_options,
@@ -9,51 +12,51 @@ from webauthn import (
     verify_authentication_response,
     verify_registration_response,
 )
+from webauthn.helpers import bytes_to_base64url
 from webauthn.helpers.structs import (
     AttestationConveyancePreference,
-    COSEAlgorithmIdentifier,
     AuthenticatorSelectionCriteria,
+    COSEAlgorithmIdentifier,
     PublicKeyCredentialDescriptor,
 )
-from secrets import token_bytes
-import sqlite3
 
 from .db import (
-    insert_user,
-    insert_authenticator,
-    select_authenticators,
     check_user_password,
+    delete_authenticator,
+    insert_authenticator,
+    insert_user,
     select_authenticator_pk,
+    select_authenticators,
 )
 
+# end imports
 
-def json_response(body: str, status_code: int = 200):
+
+def json_response(body: str, status_code: int = HTTPStatus.OK):
     return body, status_code, {"Content-Type": "application/json"}
 
 
-RP_ID = "localhost"
-RP_NAME = "localhost"
+# end helper functions
+
+RP_ID = os.getenv("WEBAUTHN_RP_ID", "localhost")
+RP_NAME = os.getenv("WEBAUTHN_RP_NAME", "localhost")
 # picky
-ORIGIN = "http://localhost:5000"
+ORIGIN = os.getenv("WEBAUTHN_ORIGIN", "http://localhost:5000")
 TIMEOUT = 60000
 
-app = Flask(__name__, static_folder="../../frontend/dist", static_url_path="/")
+# end constants
+
+app = Flask(__name__, static_folder="/usr/src/dist", static_url_path="/")
 
 app.secret_key = "secret"
 
 
-# serve SPA?
-@app.route("/")
-def index():
-    return send_from_directory("../../frontend/dist", path="index.html")
-
-
-# /user
-# get user
-@app.route("/auth/user")
-def user():
-    # TODO get user from DB
-    raise NotImplementedError()
+# https://flask.palletsprojects.com/en/2.3.x/patterns/singlepageapplications/
+@app.route("/", defaults={"path": ""})
+@app.route("/<string:path>")
+@app.route("/<path:path>")
+def index(path):
+    return send_from_directory("/usr/src/dist", path="index.html")
 
 
 # /login
@@ -69,7 +72,10 @@ def register():
     try:
         insert_user(user_name, "password", password=password)
     except sqlite3.IntegrityError:
-        return {"success": False, "error": "Username already registered."}, 500
+        return {
+            "success": False,
+            "error": "Username already registered.",
+        }, HTTPStatus.INTERNAL_SERVER_ERROR
 
     return {"success": True}
 
@@ -87,11 +93,16 @@ def login():
         is_valid, user_id = check_user_password(user_name, password)
         if is_valid:
             session["user_id"] = user_id
-            return {"success": True}, 200
+            return {"success": True}, HTTPStatus.OK
     except sqlite3.IntegrityError:
-        return {"success": False, "error": "Internal server error"}, 500
+        return {
+            "success": False,
+            "error": "Internal server error",
+        }, HTTPStatus.INTERNAL_SERVER_ERROR
 
-    return {"success": False, "error": "Invalid password"}, 401
+    session["logged_in_user"] = user_name
+
+    return {"success": False, "error": "Invalid password"}, HTTPStatus.UNAUTHORIZED
 
 
 # /logout
@@ -99,7 +110,7 @@ def login():
 def logout():
     # clear our session cookies
     session.clear()
-    return {"success": True}, 200
+    return {"success": True}, HTTPStatus.OK
 
 
 # /webauthn/register/options
@@ -108,7 +119,7 @@ def webauthn_register_options():
     # ?username=zzz
     user_name = request.args.get("user_name")
     if user_name is None:
-        return {"error": "Bad request"}, 400
+        return {"error": "Bad request"}, HTTPStatus.BAD_REQUEST
     session["user_name"] = user_name
 
     challenge = token_bytes(32)
@@ -121,7 +132,7 @@ def webauthn_register_options():
     authenticators = select_authenticators(user_name)
     # this lets us check for existing credentials if we try and re-register
     exclude_credentials = [
-        PublicKeyCredentialDescriptor(authenticator[0])
+        PublicKeyCredentialDescriptor(authenticator.id)
         for authenticator in authenticators
     ]
 
@@ -165,12 +176,18 @@ def webauthn_register():
     except Exception as ex:
         print(ex)
         # lots of things can go wrong here
-        return {"success": False, "error": "Passkey registration failed."}, 500
+        return {
+            "success": False,
+            "error": "Passkey registration failed.",
+        }, HTTPStatus.INTERNAL_SERVER_ERROR
 
     try:
         insert_user(session["user_name"], "webauthn")
     except sqlite3.IntegrityError:
-        return {"success": False, "error": "Username already registered."}, 500
+        return {
+            "success": False,
+            "error": "Username already registered.",
+        }, HTTPStatus.INTERNAL_SERVER_ERROR
 
     # save authenticator id and public key to database
     try:
@@ -183,11 +200,11 @@ def webauthn_register():
         return {
             "success": False,
             "error": "You managed to register a username but not an authenticator. Whoops!",
-        }, 500
+        }, HTTPStatus.INTERNAL_SERVER_ERROR
 
     del session["challenge"]
 
-    return {"success": True}, 200
+    return {"success": True}, HTTPStatus.OK
 
 
 # /webauthn/authenticate/options
@@ -196,7 +213,7 @@ def webauthn_authenticate_options():
     # ?username=zzz
     user_name = request.args.get("user_name")
     if user_name is None:
-        return {"error": "Bad request"}, 400
+        return {"error": "Bad request"}, HTTPStatus.BAD_REQUEST
     session["user_name"] = user_name
 
     challenge = token_bytes(32)
@@ -234,7 +251,10 @@ def webauthn_authenticate():
             raise RuntimeError("No public key found for authenticator ID")
     except Exception as ex:
         print(ex)
-        return {"success": False, "error": "Passkey authentication failed."}, 500
+        return {
+            "success": False,
+            "error": "Passkey authentication failed.",
+        }, HTTPStatus.INTERNAL_SERVER_ERROR
 
     try:
         verified_response = verify_authentication_response(
@@ -243,14 +263,60 @@ def webauthn_authenticate():
             expected_rp_id=RP_ID,
             expected_origin=ORIGIN,
             credential_public_key=public_key,
-            # always zero
-            # it's more for yubikeys and stuff
+            # always zero for passkeys
             credential_current_sign_count=0,
         )
         print(verified_response)
     except Exception as ex:
         print(ex)
         # lots of things can go wrong here
-        return {"success": False, "error": "Passkey authentication failed."}, 500
+        return {
+            "success": False,
+            "error": "Passkey authentication failed.",
+        }, HTTPStatus.INTERNAL_SERVER_ERROR
 
-    return {"success": True}, 200
+    session["logged_in_user"] = session["user_name"]
+
+    return {"success": True}, HTTPStatus.OK
+
+
+@app.route("/webauthn/list")
+def webauthn_list():
+    try:
+        user_name = session["logged_in_user"]
+    except KeyError:
+        return {"success": False, "error": "Unauthorized"}, HTTPStatus.UNAUTHORIZED
+
+    authenticators = [
+        {
+            "id": bytes_to_base64url(authn.id),
+            "publicKey": bytes_to_base64url(authn.pk),
+            "createdOn": authn.created_on,
+        }
+        for authn in select_authenticators(user_name)
+    ]
+
+    return {"success": True, "authenticators": authenticators}, HTTPStatus.OK
+
+
+@app.route("/webauthn/delete", methods=["DELETE"])
+def webauthn_delete():
+    id = request.args.get("id")
+    if id is None:
+        return {"success": False, "error": "Not authenticated"}, HTTPStatus.BAD_REQUEST
+
+    # delete an authenticator
+    # yes yes you can delete other people's authenticators atm
+    # don't do that in prod
+    # i was lazy
+    id_bytes = base64url_to_bytes(id)
+    try:
+        delete_authenticator(id_bytes)
+    except Exception as ex:
+        print(ex)
+        return {
+            "success": False,
+            "error": "Internal server error",
+        }, HTTPStatus.INTERNAL_SERVER_ERROR
+
+    return {"success": True}, HTTPStatus.OK

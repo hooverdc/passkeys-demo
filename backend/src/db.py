@@ -1,6 +1,8 @@
-import sqlite3
 import hashlib
-from typing import List, Tuple
+import sqlite3
+from contextlib import contextmanager
+from typing import List, NamedTuple, Tuple
+from datetime import datetime
 
 # sqlite3 stuff goes here
 
@@ -22,7 +24,24 @@ from typing import List, Tuple
 # );
 
 SALT = b"salt"
+DB_NAME = "./db.sqlite"
 
+
+@contextmanager
+def connect(db_name):
+    # sticking all the boilerplate here
+    conn = sqlite3.connect(db_name)
+    conn.row_factory = sqlite3.Row
+    try:
+        cur = conn.cursor()
+        yield cur
+    except Exception as e:
+        conn.rollback()
+        raise e
+    else:
+        conn.commit()
+    finally:
+        conn.close()
 
 def insert_user(username: str, authn_method: str, password: str | None = None):
     if password is not None:
@@ -33,26 +52,19 @@ def insert_user(username: str, authn_method: str, password: str | None = None):
         password_sha1 = None
         password_sha1_salt = None
 
-    print(password)
-
-    con = sqlite3.connect("./db.sqlite")
-    cur = con.cursor()
-    cur.execute(
-        """
+    with connect(DB_NAME) as cur:
+        cur.execute(
+            """
         INSERT INTO users
         (username, authn_method, password, password_sha1, password_sha1_salt)
         VALUES (?, ?, ?, ?, ?)
         """,
-        [username, authn_method, password, password_sha1, password_sha1_salt],
-    )
-    con.commit()
-    con.close()
+            [username, authn_method, password, password_sha1, password_sha1_salt],
+        )
 
 
 def select_user(username: str) -> Tuple[int, str, str] | None:
-    try:
-        con = sqlite3.connect("./db.sqlite")
-        cur = con.cursor()
+    with connect(DB_NAME) as cur:
         res = cur.execute(
             """
             SELECT id, username, password
@@ -63,89 +75,84 @@ def select_user(username: str) -> Tuple[int, str, str] | None:
         user = res.fetchone()
         if user is not None:
             return user
-    finally:
-        con.close()
-
     return None
 
 
-def check_user_password(username: str, password: str) -> Tuple[bool, int|None]:
+def check_user_password(username: str, password: str) -> Tuple[bool, int | None]:
     password_bytes = password.encode("utf-8")
     password_sha1_salt = hashlib.sha1(SALT + password_bytes).hexdigest()
-    try:
-        con = sqlite3.connect("./db.sqlite")
-        cur = con.cursor()
+    with connect(DB_NAME) as cur:
         res = cur.execute(
             "SELECT id, password_sha1_salt FROM users WHERE username = ?", [username]
         ).fetchone()
         if res is not None and res[1] == password_sha1_salt:
             return (res[0], res[1])
-    finally:
-        con.close()
-
     return (False, None)
 
 
-def insert_authenticator(username: str, id: str, pk: str):
-    try:
-        con = sqlite3.connect("./db.sqlite")
-        cur = con.cursor()
+def insert_authenticator(username: str, id: str, pk: str) -> None:
+    with connect(DB_NAME) as cur:
         user_id = cur.execute(
             "SELECT id FROM users WHERE username = ?", [username]
         ).fetchone()[0]
         cur.execute(
-            """INSERT INTO webauthn
-            (user_id, authn_id, authn_pk)
-            VALUES (?, ?, ?)
+            """
+            INSERT INTO webauthn
+            (user_id, created_on, authn_id, authn_pk)
+            VALUES (?, ?, ?, ?)
             """,
-            [user_id, id, pk],
+            [user_id, datetime.now().strftime(r"%Y/%m/%d %H:%M"), id, pk],
         )
-        con.commit()
-    finally:
-        con.close()
 
 
-def select_authenticators(username: str) -> List[Tuple[bytes, bytes]]:
+class Authenticator(NamedTuple):
+    id: bytes
+    pk: bytes
+    created_on: str
+
+
+def select_authenticators(username: str) -> List[Authenticator]:
     """Return list of tuples of form [id, pk]"""
-    try:
-        con = sqlite3.connect("./db.sqlite")
-        cur = con.cursor()
+    with connect(DB_NAME) as cur:
         # get user_id or return empty list
         res = cur.execute(
             "SELECT id FROM users WHERE username = ?", [username]
         ).fetchone()
         if res is None:
             return []
-        user_id = res[0]
+        user_id = res["id"]
+        # select authenticators matching user_id
         res = cur.execute(
             """
-            SELECT authn_id, authn_pk
+            SELECT
+            authn_id,
+            authn_pk,
+            created_on
             FROM webauthn
             WHERE user_id = ?
             """,
             [user_id],
         )
-        return [(row[0], row[1]) for row in res.fetchall()]
 
-    finally:
-        con.close()
+        return [
+            Authenticator(
+                id=row["authn_id"], pk=row["authn_pk"], created_on=row["created_on"]
+            )
+            for row in res.fetchall()
+        ]
 
 
 def select_authenticator_pk(id: bytes) -> bytes | None:
-    try:
-        con = sqlite3.connect("./db.sqlite")
-        cur = con.cursor()
+    with connect(DB_NAME) as cur:
         # get user_id or return empty list
         res = cur.execute(
             "SELECT authn_pk FROM webauthn WHERE authn_id = ?", [id]
         ).fetchone()
         if res is not None:
             return res[0]
-    finally:
-        con.close()
-
-    return None
+        return None
 
 
-def delete_authenticator():
-    pass
+def delete_authenticator(id: bytes) -> None:
+    with connect(DB_NAME) as cur:
+        cur.execute("DELETE FROM webauthn WHERE authn_id = ?", [id])

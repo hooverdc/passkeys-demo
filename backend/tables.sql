@@ -1,4 +1,4 @@
-DROP TABLE users;
+DROP TABLE IF EXISTS users;
 CREATE TABLE users (
     id INTEGER PRIMARY KEY,
     username TEXT UNIQUE,
@@ -8,11 +8,11 @@ CREATE TABLE users (
     password_sha1_salt TEXT
 );
 
-DROP TABLE webauthn;
+DROP TABLE IF EXISTS webauthn;
 CREATE TABLE webauthn (
     user_id INTEGER,
     label TEXT,
-    authn_user_id BLOB,
+    created_on TEXT,
     authn_id BLOB,
     authn_pk BLOB
 );

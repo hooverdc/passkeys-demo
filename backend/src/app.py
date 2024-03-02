@@ -43,10 +43,11 @@ RP_NAME = os.getenv("WEBAUTHN_RP_NAME", "localhost")
 # picky
 ORIGIN = os.getenv("WEBAUTHN_ORIGIN", "http://localhost:5000")
 TIMEOUT = 60000
+STATIC_FOLDER = "../../dist"
 
 # end constants
 
-app = Flask(__name__, static_folder="/usr/src/dist", static_url_path="/")
+app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path="/")
 
 app.secret_key = "secret"
 
@@ -56,7 +57,7 @@ app.secret_key = "secret"
 @app.route("/<string:path>")
 @app.route("/<path:path>")
 def index(path):
-    return send_from_directory("/usr/src/dist", path="index.html")
+    return send_from_directory(STATIC_FOLDER, path="index.html")
 
 
 # /login
